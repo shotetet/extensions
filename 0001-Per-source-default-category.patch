@@ -1,0 +1,513 @@
+From fe349f7ce63dfa4e361cd054c7bfd399d99d625a Mon Sep 17 00:00:00 2001
+From: Your Name <you@example.com>
+Date: Sun, 10 May 2026 19:37:51 +0800
+Subject: [PATCH 1/1] Per-source default category
+
+---
+ .../java/eu/kanade/domain/DomainModule.kt     |  4 ++
+ .../browse/ExtensionDetailsScreen.kt          | 64 +++++++++++++++++++
+ .../settings/screen/SettingsLibraryScreen.kt  |  4 ++
+ .../details/ExtensionDetailsScreen.kt         |  1 +
+ .../details/ExtensionDetailsScreenModel.kt    | 59 ++++++++++++++++-
+ .../source/browse/BrowseSourceScreenModel.kt  |  8 ++-
+ .../tachiyomi/ui/manga/MangaScreenModel.kt    |  4 +-
+ .../interactor/GetSourceDefaultCategory.kt    | 26 ++++++++
+ .../interactor/SetSourceDefaultCategory.kt    | 29 +++++++++
+ .../library/service/LibraryPreferences.kt     |  4 ++
+ .../moko-resources/base/strings.xml           |  1 +
+ .../moko-resources/zh-rTW/strings.xml         |  1 +
+ 12 files changed, 199 insertions(+), 6 deletions(-)
+ create mode 100644 domain/src/main/java/tachiyomi/domain/library/interactor/GetSourceDefaultCategory.kt
+ create mode 100644 domain/src/main/java/tachiyomi/domain/library/interactor/SetSourceDefaultCategory.kt
+
+diff --git a/app/src/main/java/eu/kanade/domain/DomainModule.kt b/app/src/main/java/eu/kanade/domain/DomainModule.kt
+index 6d3ddc3..ea4e86e 100644
+--- a/app/src/main/java/eu/kanade/domain/DomainModule.kt
++++ b/app/src/main/java/eu/kanade/domain/DomainModule.kt
+@@ -83,6 +83,8 @@ import tachiyomi.domain.manga.interactor.ResetViewerFlags
+ import tachiyomi.domain.manga.interactor.SetMangaChapterFlags
+ import tachiyomi.domain.manga.interactor.UpdateMangaNotes
+ import tachiyomi.domain.manga.repository.MangaRepository
++import tachiyomi.domain.library.interactor.GetSourceDefaultCategory
++import tachiyomi.domain.library.interactor.SetSourceDefaultCategory
+ import tachiyomi.domain.release.interactor.GetApplicationRelease
+ import tachiyomi.domain.release.service.ReleaseService
+ import tachiyomi.domain.source.interactor.GetRemoteManga
+@@ -134,6 +136,8 @@ class DomainModule : InjektModule {
+         addFactory { UpdateManga(get(), get()) }
+         addFactory { UpdateMangaNotes(get()) }
+         addFactory { SetMangaCategories(get()) }
++        addFactory { GetSourceDefaultCategory(get()) }
++        addFactory { SetSourceDefaultCategory(get()) }
+         addFactory { GetExcludedScanlators(get()) }
+         addFactory { SetExcludedScanlators(get()) }
+         addFactory {
+diff --git a/app/src/main/java/eu/kanade/presentation/browse/ExtensionDetailsScreen.kt b/app/src/main/java/eu/kanade/presentation/browse/ExtensionDetailsScreen.kt
+index c2219c3..345fa2c 100644
+--- a/app/src/main/java/eu/kanade/presentation/browse/ExtensionDetailsScreen.kt
++++ b/app/src/main/java/eu/kanade/presentation/browse/ExtensionDetailsScreen.kt
+@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.height
+ import androidx.compose.foundation.layout.padding
+ import androidx.compose.foundation.layout.size
+ import androidx.compose.foundation.lazy.items
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.verticalScroll
+ import androidx.compose.material.icons.Icons
+ import androidx.compose.material.icons.automirrored.outlined.Launch
+ import androidx.compose.material.icons.outlined.Settings
+@@ -39,6 +41,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
+ import androidx.compose.ui.platform.LocalContext
+ import androidx.compose.ui.platform.LocalUriHandler
+ import androidx.compose.ui.res.vectorResource
++import androidx.compose.ui.util.fastMap
+ import androidx.compose.ui.text.TextStyle
+ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.text.style.TextAlign
+@@ -58,6 +61,7 @@ import eu.kanade.tachiyomi.util.system.LocaleHelper
+ import eu.kanade.tachiyomi.util.system.copyToClipboard
+ import kotlinx.collections.immutable.ImmutableList
+ import kotlinx.collections.immutable.persistentListOf
++import tachiyomi.domain.category.model.Category
+ import tachiyomi.i18n.MR
+ import tachiyomi.presentation.core.components.ScrollbarLazyColumn
+ import tachiyomi.presentation.core.components.material.Scaffold
+@@ -76,6 +80,7 @@ fun ExtensionDetailsScreen(
+     onClickUninstall: () -> Unit,
+     onClickSource: (sourceId: Long) -> Unit,
+     onClickIncognito: (Boolean) -> Unit,
++    onSetDefaultCategory: (Long?) -> Unit,
+ ) {
+     val uriHandler = LocalUriHandler.current
+     val url = remember(state.extension) {
+@@ -145,10 +150,14 @@ fun ExtensionDetailsScreen(
+             extension = state.extension,
+             sources = state.sources,
+             incognitoMode = state.isIncognito,
++            perSourceDefaultCategoryEnabled = state.perSourceDefaultCategoryEnabled,
++            extensionDefaultCategory = state.extensionDefaultCategory,
++            allCategories = state.allCategories,
+             onClickSourcePreferences = onClickSourcePreferences,
+             onClickUninstall = onClickUninstall,
+             onClickSource = onClickSource,
+             onClickIncognito = onClickIncognito,
++            onSetDefaultCategory = onSetDefaultCategory,
+         )
+     }
+ }
+@@ -159,10 +168,14 @@ private fun ExtensionDetails(
+     extension: Extension.Installed,
+     sources: ImmutableList<ExtensionSourceItem>,
+     incognitoMode: Boolean,
++    perSourceDefaultCategoryEnabled: Boolean,
++    extensionDefaultCategory: Long?,
++    allCategories: ImmutableList<Category>,
+     onClickSourcePreferences: (sourceId: Long) -> Unit,
+     onClickUninstall: () -> Unit,
+     onClickSource: (sourceId: Long) -> Unit,
+     onClickIncognito: (Boolean) -> Unit,
++    onSetDefaultCategory: (Long?) -> Unit,
+ ) {
+     val context = LocalContext.current
+     var showNsfwWarning by remember { mutableStateOf(false) }
+@@ -180,6 +193,9 @@ private fun ExtensionDetails(
+             DetailsHeader(
+                 extension = extension,
+                 extIncognitoMode = incognitoMode,
++                perSourceDefaultCategoryEnabled = perSourceDefaultCategoryEnabled,
++                extensionDefaultCategory = extensionDefaultCategory,
++                allCategories = allCategories,
+                 onClickUninstall = onClickUninstall,
+                 onClickAppInfo = {
+                     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+@@ -192,6 +208,7 @@ private fun ExtensionDetails(
+                     showNsfwWarning = true
+                 },
+                 onExtIncognitoChange = onClickIncognito,
++		onSetDefaultCategory = onSetDefaultCategory,
+             )
+         }
+ 
+@@ -220,10 +237,14 @@ private fun ExtensionDetails(
+ private fun DetailsHeader(
+     extension: Extension,
+     extIncognitoMode: Boolean,
++    perSourceDefaultCategoryEnabled: Boolean,
++    extensionDefaultCategory: Long?,
++    allCategories: ImmutableList<Category>,
+     onClickAgeRating: () -> Unit,
+     onClickUninstall: () -> Unit,
+     onClickAppInfo: (() -> Unit)?,
+     onExtIncognitoChange: (Boolean) -> Unit,
++    onSetDefaultCategory: (Long?) -> Unit,
+ ) {
+     val context = LocalContext.current
+ 
+@@ -367,6 +388,49 @@ private fun DetailsHeader(
+             },
+         )
+ 
++        if (perSourceDefaultCategoryEnabled) {
++            var showCategoryDialog by remember { mutableStateOf(false) }
++            val labels = listOf(stringResource(MR.strings.default_category_summary)) + allCategories.fastMap { it.name }
++            val ids = listOf(-1L) + allCategories.fastMap { it.id }
++
++            TextPreferenceWidget(
++                modifier = Modifier.padding(horizontal = MaterialTheme.padding.small),
++                title = stringResource(MR.strings.default_category),
++                subtitle = labels[ids.indexOf(extensionDefaultCategory ?: -1L)],
++                onPreferenceClick = { showCategoryDialog = true },
++            )
++
++            if (showCategoryDialog) {
++                AlertDialog(
++                    onDismissRequest = { showCategoryDialog = false },
++                    title = { Text(text = stringResource(MR.strings.default_category)) },
++                    text = {
++                        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
++                            ids.forEachIndexed { index, id ->
++                                Row(
++                                    modifier = Modifier
++                                        .fillMaxWidth()
++                                        .clickable {
++                                            onSetDefaultCategory(id.takeIf { it != -1L })
++                                            showCategoryDialog = false
++                                        }
++                                        .padding(16.dp),
++                                    verticalAlignment = Alignment.CenterVertically,
++                                ) {
++                                    Text(text = labels[index])
++                                }
++                            }
++                        }
++                    },
++                    confirmButton = {
++                        TextButton(onClick = { showCategoryDialog = false }) {
++                            Text(text = stringResource(MR.strings.action_cancel))
++                        }
++                    },
++                )
++            }
++        }
++
+         HorizontalDivider()
+     }
+ }
+diff --git a/app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsLibraryScreen.kt b/app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsLibraryScreen.kt
+index 61f89ce..ef43456 100644
+--- a/app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsLibraryScreen.kt
++++ b/app/src/main/java/eu/kanade/presentation/more/settings/screen/SettingsLibraryScreen.kt
+@@ -107,6 +107,10 @@ object SettingsLibraryScreen : SearchableSettings {
+                         true
+                     },
+                 ),
++                Preference.PreferenceItem.SwitchPreference(
++                    preference = libraryPreferences.perSourceDefaultCategory,
++                    title = stringResource(MR.strings.per_source_default_category),
++                ),
+             ),
+         )
+     }
+diff --git a/app/src/main/java/eu/kanade/tachiyomi/ui/browse/extension/details/ExtensionDetailsScreen.kt b/app/src/main/java/eu/kanade/tachiyomi/ui/browse/extension/details/ExtensionDetailsScreen.kt
+index 8cac9c5..3085b80 100644
+--- a/app/src/main/java/eu/kanade/tachiyomi/ui/browse/extension/details/ExtensionDetailsScreen.kt
++++ b/app/src/main/java/eu/kanade/tachiyomi/ui/browse/extension/details/ExtensionDetailsScreen.kt
+@@ -40,6 +40,7 @@ data class ExtensionDetailsScreen(
+             onClickUninstall = screenModel::uninstallExtension,
+             onClickSource = screenModel::toggleSource,
+             onClickIncognito = screenModel::toggleIncognito,
++            onSetDefaultCategory = screenModel::setExtensionDefaultCategory,
+         )
+ 
+         LaunchedEffect(Unit) {
+diff --git a/app/src/main/java/eu/kanade/tachiyomi/ui/browse/extension/details/ExtensionDetailsScreenModel.kt b/app/src/main/java/eu/kanade/tachiyomi/ui/browse/extension/details/ExtensionDetailsScreenModel.kt
+index e763fb6..8253350 100644
+--- a/app/src/main/java/eu/kanade/tachiyomi/ui/browse/extension/details/ExtensionDetailsScreenModel.kt
++++ b/app/src/main/java/eu/kanade/tachiyomi/ui/browse/extension/details/ExtensionDetailsScreenModel.kt
+@@ -4,6 +4,7 @@ import android.content.Context
+ import androidx.compose.runtime.Immutable
+ import cafe.adriel.voyager.core.model.StateScreenModel
+ import cafe.adriel.voyager.core.model.screenModelScope
++import eu.kanade.domain.base.BasePreferences
+ import eu.kanade.domain.extension.interactor.ExtensionSourceItem
+ import eu.kanade.domain.extension.interactor.GetExtensionSources
+ import eu.kanade.domain.source.interactor.ToggleIncognito
+@@ -21,26 +22,39 @@ import kotlinx.coroutines.channels.Channel
+ import kotlinx.coroutines.flow.Flow
+ import kotlinx.coroutines.flow.catch
+ import kotlinx.coroutines.flow.collectLatest
++import kotlinx.coroutines.flow.combine
+ import kotlinx.coroutines.flow.distinctUntilChanged
+ import kotlinx.coroutines.flow.map
+ import kotlinx.coroutines.flow.receiveAsFlow
+ import kotlinx.coroutines.flow.update
+ import kotlinx.coroutines.launch
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.contentOrNull
++import kotlinx.serialization.json.jsonObject
++import kotlinx.serialization.json.jsonPrimitive
+ import logcat.LogPriority
+ import okhttp3.HttpUrl.Companion.toHttpUrl
+ import tachiyomi.core.common.util.system.logcat
++import tachiyomi.domain.category.interactor.GetCategories
++import tachiyomi.domain.category.model.Category
++import tachiyomi.domain.library.interactor.SetSourceDefaultCategory
++import tachiyomi.domain.library.service.LibraryPreferences
+ import uy.kohesive.injekt.Injekt
+ import uy.kohesive.injekt.api.get
+ 
+ class ExtensionDetailsScreenModel(
+-    pkgName: String,
+-    context: Context,
++    private val pkgName: String,
++    private val context: Context,
+     private val network: NetworkHelper = Injekt.get(),
+     private val extensionManager: ExtensionManager = Injekt.get(),
+     private val getExtensionSources: GetExtensionSources = Injekt.get(),
+     private val toggleSource: ToggleSource = Injekt.get(),
+     private val toggleIncognito: ToggleIncognito = Injekt.get(),
+     private val preferences: SourcePreferences = Injekt.get(),
++    private val getCategories: GetCategories = Injekt.get(),
++    private val setSourceDefaultCategory: SetSourceDefaultCategory = Injekt.get(),
++    private val libraryPreferences: LibraryPreferences = Injekt.get(),
++    private val basePreferences: BasePreferences = Injekt.get(),
+ ) : StateScreenModel<ExtensionDetailsScreenModel.State>(State()) {
+ 
+     private val _events: Channel<ExtensionDetailsEvent> = Channel()
+@@ -61,6 +75,39 @@ class ExtensionDetailsScreenModel(
+                         }
+                     }
+             }
++            launch {
++                libraryPreferences.perSourceDefaultCategory.changes()
++                    .collectLatest { enabled ->
++                        mutableState.update { it.copy(perSourceDefaultCategoryEnabled = enabled) }
++                    }
++            }
++            launch {
++                combine(
++                    getCategories.subscribe(),
++                    libraryPreferences.sourceDefaultCategories.changes(),
++                    libraryPreferences.defaultCategory.changes(),
++                ) { categories, _, globalDefaultId ->
++                    val extension = state.value.extension ?: return@combine
++                    val firstSourceId = extension.sources.firstOrNull()?.id
++                    val sourceSpecificId = firstSourceId?.let { id ->
++                        val json = libraryPreferences.sourceDefaultCategories.get()
++                        try {
++                            val element = Json.parseToJsonElement(json).jsonObject[id.toString()]
++                            element?.jsonPrimitive?.contentOrNull?.toLong()
++                        } catch (e: Exception) {
++                            null
++                        }
++                    }
++                    val defaultCategoryId = sourceSpecificId ?: globalDefaultId.toLong()
++                    val userCategories = categories.filterNot { it.isSystemCategory }
++                    mutableState.update { state ->
++                        state.copy(
++                            extensionDefaultCategory = defaultCategoryId,
++                            allCategories = userCategories.toImmutableList(),
++                        )
++                    }
++                }.collectLatest {}
++            }
+             launch {
+                 state.collectLatest { state ->
+                     if (state.extension == null) return@collectLatest
+@@ -137,11 +184,19 @@ class ExtensionDetailsScreenModel(
+             toggleIncognito.await(packageName, enable)
+         }
+     }
++    fun setExtensionDefaultCategory(categoryId: Long?) {
++        state.value.extension?.sources?.forEach { source ->
++            setSourceDefaultCategory.await(source.id, categoryId)
++        }
++    }
+ 
+     @Immutable
+     data class State(
+         val extension: Extension.Installed? = null,
+         val isIncognito: Boolean = false,
++        val perSourceDefaultCategoryEnabled: Boolean = false,
++        val extensionDefaultCategory: Long? = null,
++        val allCategories: ImmutableList<Category> = persistentListOf(),
+         private val _sources: ImmutableList<ExtensionSourceItem>? = null,
+     ) {
+ 
+diff --git a/app/src/main/java/eu/kanade/tachiyomi/ui/browse/source/browse/BrowseSourceScreenModel.kt b/app/src/main/java/eu/kanade/tachiyomi/ui/browse/source/browse/BrowseSourceScreenModel.kt
+index bf55f35..7193b9d 100644
+--- a/app/src/main/java/eu/kanade/tachiyomi/ui/browse/source/browse/BrowseSourceScreenModel.kt
++++ b/app/src/main/java/eu/kanade/tachiyomi/ui/browse/source/browse/BrowseSourceScreenModel.kt
+@@ -40,6 +40,7 @@ import tachiyomi.domain.category.interactor.GetCategories
+ import tachiyomi.domain.category.interactor.SetMangaCategories
+ import tachiyomi.domain.category.model.Category
+ import tachiyomi.domain.chapter.interactor.SetMangaDefaultChapterFlags
++import tachiyomi.domain.library.interactor.GetSourceDefaultCategory
+ import tachiyomi.domain.library.service.LibraryPreferences
+ import tachiyomi.domain.manga.interactor.GetDuplicateLibraryManga
+ import tachiyomi.domain.manga.interactor.GetManga
+@@ -64,6 +65,7 @@ class BrowseSourceScreenModel(
+     private val getDuplicateLibraryManga: GetDuplicateLibraryManga = Injekt.get(),
+     private val getCategories: GetCategories = Injekt.get(),
+     private val setMangaCategories: SetMangaCategories = Injekt.get(),
++    private val getSourceDefaultCategory: GetSourceDefaultCategory = Injekt.get(),
+     private val setMangaDefaultChapterFlags: SetMangaDefaultChapterFlags = Injekt.get(),
+     private val getManga: GetManga = Injekt.get(),
+     private val updateManga: UpdateManga = Injekt.get(),
+@@ -241,8 +243,8 @@ class BrowseSourceScreenModel(
+     fun addFavorite(manga: Manga) {
+         screenModelScope.launch {
+             val categories = getCategories()
+-            val defaultCategoryId = libraryPreferences.defaultCategory.get()
+-            val defaultCategory = categories.find { it.id == defaultCategoryId.toLong() }
++            val defaultCategoryId = getSourceDefaultCategory.await(manga.source)
++            val defaultCategory = categories.find { it.id == defaultCategoryId }
+ 
+             when {
+                 // Default category set
+@@ -253,7 +255,7 @@ class BrowseSourceScreenModel(
+                 }
+ 
+                 // Automatic 'Default' or no categories
+-                defaultCategoryId == 0 || categories.isEmpty() -> {
++                defaultCategoryId == 0L || categories.isEmpty() -> {
+                     moveMangaToCategories(manga)
+ 
+                     changeMangaFavorite(manga)
+diff --git a/app/src/main/java/eu/kanade/tachiyomi/ui/manga/MangaScreenModel.kt b/app/src/main/java/eu/kanade/tachiyomi/ui/manga/MangaScreenModel.kt
+index 78c80c8..c235449 100644
+--- a/app/src/main/java/eu/kanade/tachiyomi/ui/manga/MangaScreenModel.kt
++++ b/app/src/main/java/eu/kanade/tachiyomi/ui/manga/MangaScreenModel.kt
+@@ -75,6 +75,7 @@ import tachiyomi.domain.chapter.model.ChapterUpdate
+ import tachiyomi.domain.chapter.model.NoChaptersException
+ import tachiyomi.domain.chapter.service.calculateChapterGap
+ import tachiyomi.domain.chapter.service.getChapterSort
++import tachiyomi.domain.library.interactor.GetSourceDefaultCategory
+ import tachiyomi.domain.library.service.LibraryPreferences
+ import tachiyomi.domain.manga.interactor.GetDuplicateLibraryManga
+ import tachiyomi.domain.manga.interactor.GetMangaWithChapters
+@@ -118,6 +119,7 @@ class MangaScreenModel(
+     private val getTracks: GetTracks = Injekt.get(),
+     private val addTracks: AddTracks = Injekt.get(),
+     private val setMangaCategories: SetMangaCategories = Injekt.get(),
++    private val getSourceDefaultCategory: GetSourceDefaultCategory = Injekt.get(),
+     private val mangaRepository: MangaRepository = Injekt.get(),
+     private val filterChaptersForDownload: FilterChaptersForDownload = Injekt.get(),
+     val snackbarHostState: SnackbarHostState = SnackbarHostState(),
+@@ -338,7 +340,7 @@ class MangaScreenModel(
+ 
+                 // Now check if user previously set categories, when available
+                 val categories = getCategories()
+-                val defaultCategoryId = libraryPreferences.defaultCategory.get().toLong()
++                val defaultCategoryId = getSourceDefaultCategory.await(manga.source)
+                 val defaultCategory = categories.find { it.id == defaultCategoryId }
+                 when {
+                     // Default category set
+diff --git a/domain/src/main/java/tachiyomi/domain/library/interactor/GetSourceDefaultCategory.kt b/domain/src/main/java/tachiyomi/domain/library/interactor/GetSourceDefaultCategory.kt
+new file mode 100644
+index 0000000..5ab0b27
+--- /dev/null
++++ b/domain/src/main/java/tachiyomi/domain/library/interactor/GetSourceDefaultCategory.kt
+@@ -0,0 +1,26 @@
++package tachiyomi.domain.library.interactor
++
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.contentOrNull
++import kotlinx.serialization.json.jsonObject
++import kotlinx.serialization.json.jsonPrimitive
++import tachiyomi.domain.library.service.LibraryPreferences
++
++class GetSourceDefaultCategory(
++    private val libraryPreferences: LibraryPreferences,
++) {
++
++    fun await(sourceId: Long): Long {
++        if (!libraryPreferences.perSourceDefaultCategory.get()) {
++            return libraryPreferences.defaultCategory.get().toLong()
++        }
++
++        val json = libraryPreferences.sourceDefaultCategories.get()
++        return try {
++            val element = Json.parseToJsonElement(json).jsonObject[sourceId.toString()]
++            element?.jsonPrimitive?.contentOrNull?.toLong() ?: libraryPreferences.defaultCategory.get().toLong()
++        } catch (e: Exception) {
++            libraryPreferences.defaultCategory.get().toLong()
++        }
++    }
++}
+diff --git a/domain/src/main/java/tachiyomi/domain/library/interactor/SetSourceDefaultCategory.kt b/domain/src/main/java/tachiyomi/domain/library/interactor/SetSourceDefaultCategory.kt
+new file mode 100644
+index 0000000..d27a0f6
+--- /dev/null
++++ b/domain/src/main/java/tachiyomi/domain/library/interactor/SetSourceDefaultCategory.kt
+@@ -0,0 +1,29 @@
++package tachiyomi.domain.library.interactor
++
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.JsonPrimitive
++import kotlinx.serialization.json.jsonObject
++import tachiyomi.domain.library.service.LibraryPreferences
++
++class SetSourceDefaultCategory(
++    private val libraryPreferences: LibraryPreferences,
++) {
++
++    fun await(sourceId: Long, categoryId: Long?) {
++        val json = libraryPreferences.sourceDefaultCategories.get()
++        val currentMap = try {
++            Json.parseToJsonElement(json).jsonObject.toMutableMap()
++        } catch (e: Exception) {
++            mutableMapOf()
++        }
++
++        if (categoryId != null) {
++            currentMap[sourceId.toString()] = JsonPrimitive(categoryId)
++        } else {
++            currentMap.remove(sourceId.toString())
++        }
++
++        libraryPreferences.sourceDefaultCategories.set(JsonObject(currentMap).toString())
++    }
++}
+diff --git a/domain/src/main/java/tachiyomi/domain/library/service/LibraryPreferences.kt b/domain/src/main/java/tachiyomi/domain/library/service/LibraryPreferences.kt
+index a7f4616..68bb8a9 100644
+--- a/domain/src/main/java/tachiyomi/domain/library/service/LibraryPreferences.kt
++++ b/domain/src/main/java/tachiyomi/domain/library/service/LibraryPreferences.kt
+@@ -132,6 +132,10 @@ class LibraryPreferences(
+ 
+     val categorizedDisplaySettings: Preference<Boolean> = preferenceStore.getBoolean("categorized_display", false)
+ 
++    val perSourceDefaultCategory: Preference<Boolean> = preferenceStore.getBoolean("per_source_default_category", false)
++
++    val sourceDefaultCategories: Preference<String> = preferenceStore.getString("source_default_categories", "{}")
++
+     val updateCategories: Preference<Set<String>> = preferenceStore.getStringSet(
+         LIBRARY_UPDATE_CATEGORIES_PREF_KEY,
+         emptySet(),
+diff --git a/i18n/src/commonMain/moko-resources/base/strings.xml b/i18n/src/commonMain/moko-resources/base/strings.xml
+index d0b7edd..088ed37 100644
+--- a/i18n/src/commonMain/moko-resources/base/strings.xml
++++ b/i18n/src/commonMain/moko-resources/base/strings.xml
+@@ -304,6 +304,7 @@
+ 
+     <string name="default_category">Default category</string>
+     <string name="default_category_summary">Always ask</string>
++    <string name="per_source_default_category">Per-source default category</string>
+     <string name="categorized_display_settings">Per-category settings for sort</string>
+     <string name="pref_library_update_categories_details">Entries in excluded categories will not be updated even if they are also in included categories.</string>
+     <string name="all">All</string>
+diff --git a/i18n/src/commonMain/moko-resources/zh-rTW/strings.xml b/i18n/src/commonMain/moko-resources/zh-rTW/strings.xml
+index 93c4ddb..602a9a0 100644
+--- a/i18n/src/commonMain/moko-resources/zh-rTW/strings.xml
++++ b/i18n/src/commonMain/moko-resources/zh-rTW/strings.xml
+@@ -83,6 +83,7 @@
+     <string name="pref_update_only_non_completed">略過已完結的作品</string>
+     <string name="default_category">預設類別</string>
+     <string name="default_category_summary">總是詢問</string>
++    <string name="per_source_default_category">各個來源獨立的預設類別</string>
+     <string name="ext_update">更新</string>
+     <string name="ext_install">安裝</string>
+     <string name="ext_pending">等待中</string>
+-- 
+2.25.1
+
